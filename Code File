@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Vora Voice — Say anything</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      background: #0a0a0f;
+      color: #e8e8f0;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }
+
+    .orb-wrap {
+      position: relative;
+      width: 140px;
+      height: 140px;
+      margin-bottom: 40px;
+    }
+
+    .orb {
+      width: 140px;
+      height: 140px;
+      border-radius: 50%;
+      background: radial-gradient(circle at 38% 36%, #7c3aed, #3b1f8c 60%, #0a0a0f);
+      box-shadow: 0 0 40px #7c3aed55, 0 0 80px #7c3aed22;
+      transition: transform 0.15s ease, box-shadow 0.15s ease;
+    }
+
+    .orb.listening {
+      animation: pulse 1.8s ease-in-out infinite;
+    }
+
+    .orb.thinking {
+      animation: spin-glow 1s linear infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { transform: scale(1);   box-shadow: 0 0 40px #7c3aed66, 0 0 80px #7c3aed22; }
+      50%       { transform: scale(1.1); box-shadow: 0 0 60px #a855f7aa, 0 0 120px #7c3aed44; }
+    }
+
+    @keyframes spin-glow {
+      0%   { box-shadow: 0 0 60px #a855f7cc, 0 0 120px #7c3aed44; transform: scale(1.05); }
+      50%  { box-shadow: 0 0 80px #c084fccc, 0 0 160px #7c3aed55; transform: scale(1.08); }
+      100% { box-shadow: 0 0 60px #a855f7cc, 0 0 120px #7c3aed44; transform: scale(1.05); }
+    }
+
+    .status {
+      font-size: 13px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: #6b6b8a;
+      margin-bottom: 32px;
+      min-height: 20px;
+    }
+
+    .status.active   { color: #a855f7; }
+    .status.thinking { color: #818cf8; }
+    .status.error    { color: #f87171; }
+
+    .heard-text {
+      font-size: 22px;
+      font-weight: 600;
+      color: #c4b5fd;
+      text-align: center;
+      margin-bottom: 28px;
+      min-height: 32px;
+      max-width: 480px;
+      line-height: 1.4;
+    }
+
+    .result-card {
+      background: #13131f;
+      border: 1px solid #2a2a40;
+      border-radius: 16px;
+      padding: 28px 32px;
+      max-width: 600px;
+      width: 100%;
+      line-height: 1.7;
+      font-size: 16px;
+      color: #d4d4e8;
+      white-space: pre-wrap;
+      opacity: 0;
+      transform: translateY(12px);
+      transition: opacity 0.4s ease, transform 0.4s ease;
+    }
+
+    .result-card.visible {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    .result-card strong {
+      color: #c4b5fd;
+    }
+
+    .hint {
+      margin-top: 32px;
+      font-size: 12px;
+      color: #3a3a55;
+      text-align: center;
+    }
+
+    .mic-off-notice {
+      display: none;
+      background: #1f1020;
+      border: 1px solid #f87171;
+      border-radius: 12px;
+      padding: 20px 28px;
+      text-align: center;
+      max-width: 440px;
+      color: #fca5a5;
+      font-size: 15px;
+      line-height: 1.6;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="orb-wrap">
+    <div class="orb" id="orb"></div>
+  </div>
+
+  <div class="status" id="status">starting…</div>
+  <div class="heard-text" id="heard"></div>
+  <div class="result-card" id="result"></div>
+  <div class="hint" id="hint">Speak a word, phrase, or question — I'll explain it.</div>
+  <div class="mic-off-notice" id="micOff">
+    Microphone access was denied.<br />
+    Please allow microphone access in your browser and reload the page.
+  </div>
+
+  <script>
+    // ── CONFIG ─────────────────────────────────────────────────────
+    const GEMINI_API_KEY = 'AIzaSyAJl5liHwiTrE7p1M5x0azS9QZyI10yS_8';
+    const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${GEMINI_API_KEY}`;
+    // ───────────────────────────────────────────────────────────────
+
+    const orb      = document.getElementById('orb');
+    const status   = document.getElementById('status');
+    const heard    = document.getElementById('heard');
+    const result   = document.getElementById('result');
+    const hint     = document.getElementById('hint');
+    const micOff   = document.getElementById('micOff');
+
+    let recognition;
+    let restartTimer;
+
+    function setStatus(text, cls) {
+      status.textContent = text;
+      status.className = 'status ' + (cls || '');
+    }
+
+    function setOrb(mode) {
+      orb.className = 'orb ' + (mode || '');
+    }
+
+    async function askGemini(query, attempt = 0) {
+      const prompt = `The user said: "${query}"
+
+Provide clear, useful information. Structure your response like this:
+
+If it's a single word or term:
+• Definition: ...
+• Example: ...
+• Extra info: ...
+
+If it's a question or phrase, just answer it directly and helpfully in 2-4 sentences.
+
+Keep it concise and easy to read. No markdown symbols like ** or ##.`;
+
+      const res = await fetch(GEMINI_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: { temperature: 0.4, maxOutputTokens: 400 }
+        })
+      });
+
+      if ((res.status === 429 || res.status === 503) && attempt < 4) {
+        const wait = (attempt + 1) * 3000; // 3s, 6s, 9s, 12s
+        setStatus(`retrying in ${wait / 1000}s…`, 'thinking');
+        await new Promise(r => setTimeout(r, wait));
+        return askGemini(query, attempt + 1);
+      }
+
+      if (!res.ok) throw new Error(`Gemini error ${res.status}`);
+      const data = await res.json();
+      return data.candidates?.[0]?.content?.parts?.[0]?.text || 'No response.';
+    }
+
+    function showResult(text) {
+      result.textContent = text;
+      result.classList.add('visible');
+    }
+
+    function hideResult() {
+      result.classList.remove('visible');
+      result.textContent = '';
+    }
+
+    function startListening() {
+      clearTimeout(restartTimer);
+      try { recognition.start(); } catch (e) { /* already running */ }
+    }
+
+    function initSpeech() {
+      const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+
+      if (!SR) {
+        setStatus('Not supported', 'error');
+        hint.textContent = 'Your browser does not support speech recognition. Use Chrome or Edge.';
+        return;
+      }
+
+      recognition = new SR();
+      recognition.lang = 'en-US';
+      recognition.continuous = false;
+      recognition.interimResults = true;
+      recognition.maxAlternatives = 1;
+
+      recognition.onstart = () => {
+        setOrb('listening');
+        setStatus('listening…', 'active');
+        hint.style.display = 'block';
+        micOff.style.display = 'none';
+      };
+
+      recognition.onresult = (event) => {
+        const transcript = Array.from(event.results)
+          .map(r => r[0].transcript)
+          .join('');
+        const isFinal = event.results[event.results.length - 1].isFinal;
+
+        heard.textContent = transcript;
+
+        if (isFinal && transcript.trim().length > 0) {
+          processQuery(transcript.trim());
+        }
+      };
+
+      recognition.onerror = (event) => {
+        if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
+          setStatus('Microphone blocked', 'error');
+          setOrb('');
+          hint.style.display = 'none';
+          micOff.style.display = 'block';
+          return;
+        }
+        // no-speech or network — just restart
+        setOrb('');
+        setStatus('listening…', 'active');
+        setOrb('listening');
+        restartTimer = setTimeout(startListening, 300);
+      };
+
+      recognition.onend = () => {
+        // Auto-restart unless we're currently thinking
+        if (orb.className !== 'orb thinking') {
+          restartTimer = setTimeout(startListening, 400);
+        }
+      };
+
+      startListening();
+    }
+
+    async function processQuery(query) {
+      // Stop listening while thinking
+      try { recognition.stop(); } catch (e) {}
+      clearTimeout(restartTimer);
+
+      setOrb('thinking');
+      setStatus('thinking…', 'thinking');
+      hideResult();
+
+      try {
+        const answer = await askGemini(query);
+        showResult(answer);
+        setOrb('');
+        setStatus('done — speak again', '');
+      } catch (err) {
+        showResult('Something went wrong: ' + err.message);
+        setOrb('');
+        setStatus('error', 'error');
+      }
+
+      // Restart listening after a short pause
+      restartTimer = setTimeout(startListening, 1800);
+    }
+
+    // Kick off
+    initSpeech();
+  </script>
+</body>
+</html>
+# (This Code is HTML)
