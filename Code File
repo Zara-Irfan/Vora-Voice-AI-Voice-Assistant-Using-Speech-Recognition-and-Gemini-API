@@ -141,7 +141,7 @@
 
   <script>
     // ── CONFIG ─────────────────────────────────────────────────────
-    const GEMINI_API_KEY = 'AIzaSyAJl5liHwiTrE7p1M5x0azS9QZyI10yS_8';
+    const GEMINI_API_KEY = 'YOUR_GEMINI_API_KEY';
     const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${GEMINI_API_KEY}`;
     // ───────────────────────────────────────────────────────────────
 
